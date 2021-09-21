@@ -7,11 +7,11 @@ import org.apache.spark.storage.StorageLevel
 object Main extends App {
 
   val spark = SparkSession.builder
-    .master("local[*]")
+    .master("local[4]")
     .appName("BankProject")
     .getOrCreate()
 
-  spark.sparkContext.setLogLevel("Error")
+  spark.sparkContext.setLogLevel("ERROR")
   spark.conf.set("spark.sql.shuffle.partitions", "20")
 
   val accountSchema = StructType(Array(
@@ -20,8 +20,8 @@ object Main extends App {
     StructField("ClientID", IntegerType, nullable = true),
     StructField("DateOpen", DateType, nullable = true)
   ))
-  val clientsSchema = StructType(Array(
-    StructField("ClientId", IntegerType, nullable = true),
+  val clientSchema = StructType(Array(
+    StructField("ClientID", IntegerType, nullable = true),
     StructField("ClientName", StringType, nullable = true),
     StructField("Type", StringType, nullable = true),
     StructField("Form", StringType, nullable = true),
@@ -41,14 +41,14 @@ object Main extends App {
     StructField("RateDate", DateType, nullable = true)
   ))
 
-  val accountsDf = spark.read
+  val accountDf = spark.read
     .format("csv")
     .option("header", "true")
     .csv("src/main/scala/Account.csv")
-  val clientsDf = spark.read
+  val clientDf = spark.read
     .format("csv")
     .option("header", "true")
-    .csv("src/main/scala/Сlients.csv")
+    .csv("src/main/scala/Clients.csv")
   val operationDf = spark.read
     .format("csv")
     .option("header", "true")
@@ -59,12 +59,13 @@ object Main extends App {
     .csv("src/main/scala/rate.csv")
 
 
-  val temp = accountsDf
-    .join(clientsDf, accountsDf("ClientId") === clientsDf("ClientsId"))
-    .drop(clientsDf("ClientId"))
+
+  val acc_cl = accountDf
+    .join(clientDf, accountDf("ClientID") === clientDf("ClientsID"))
+    .drop(clientDf("ClientID"))
     .persist(StorageLevel.MEMORY_ONLY_SER)
 
-  val temp1 = rateDf.select(
+  val optrate = rateDf.select(
     col("RateDate").as("DateRate"),
     col("Currency").as("CurRate"),
     col("Rate"))
@@ -72,29 +73,31 @@ object Main extends App {
 
 
   var daterates = operationDf.select(col("DateOp").as("Date")).distinct()
-  daterates = daterates.crossJoin(temp1.select(col("CurRate").as("Currency")).distinct()
+  daterates = daterates.crossJoin(optrate.select(col("CurRate").as("Currency")).distinct()
   )
 
   daterates = daterates
-    .join(temp1, daterates("Date") === temp1("DateRate")
-      && daterates("Currency") === ("CurRate"), "left")
+    .join(optrate, daterates("Date") ===optrate("DateRate")
+      && daterates("Currency") ===optrate("CurRate"), "left")
     .drop("DateRate")
     .drop("CurRate")
 
-  val show = Window.partitionBy("Currency").orderBy(desc("Rate"), asc("Date"))
+  val window = Window.partitionBy("Currency").orderBy(desc("Rate"), asc("Date"))
+  daterates = daterates.withColumn("Rate",last("Rate", ignoreNulls = true) over window)
 
   val result = operationDf
-    .join(temp.select(
-      col("AccountId").alias("AccDB"),
+    .join(acc_cl.select(
+      col("AccountID").alias("AccDB"),
       col("AccountNum").alias("NumDB"),
-      col("Type").alias("TypeDB"),
-      col("ClientID").alias("ClientDB")
+      col("ClientID").alias("ClientDB"),
+      col("Type").alias("TypeDB")
     ), col("AccDB") === col("AccountDB") || col("AccDB") === col("AccountCR"), "left")
-    .join(temp.select(
-      col("AccountId").alias("AccCR"),
+    .join(acc_cl.select(
+      col("AccountID").alias("AccCR"),
       col("AccountNum").alias("NumCR"),
-      col("Type").alias("TypeCR"),
-      col("ClientID").alias("ClientCR")),
+      col("ClientID").alias("ClientCR"),
+      col("Type").alias("TypeCR")
+    ),
       col("AccCR") === col("AccountCR"), "left")
     .join(daterates, col("DateOp") === col("Date") && operationDf("Currency") === daterates("Currency"), "left")
     .drop(daterates("Currency"))
@@ -141,15 +144,30 @@ CutoffDt
 */
   result.groupBy(col("AccDB").as("AccountID"), col("DateOp").as("CutoffDate"))
     .agg(
-      round(sum(when(col("AccDB") === col("AccountDB"), convertRate))).as("PaymentAmt"),
-      round(sum(when(col("AccDB") === col("AccountCR"), convertRate))).as("EnrollmentAmt"),
-      round(sum(when(col("AccDB") === col("AccountDB") && col("NumCr").startsWith("40702"), convertRate))).as("TaxAmt"),
-      round(sum(when(col("AccDB") === col("AccountCR") && col("NumDb").startsWith("40802"), convertRate))).as("ClearAmt"),
-      round(sum(when(col("AccDB") === col("AccountDB") && condAuto, convertRate))).as("AutoAmt"),
-      round(sum(when(col("AccDB") === col("AccountCR") && condEat, convertRate))).as("EatAmt"),
-      round(sum(when(col("AccDB") === col("AccountDB") && col("TypeCR") === "0", convertRate))).as("FLAmt")
+      round(sum(when(col("AccDB") ===col("AccountDB"), convertRate))).as("PaymentAmt"),
+      round(sum(when(col("AccDB") ===col("AccountCR"), convertRate))).as("EnrollmentAmt"),
+      round(sum(when(col("AccDB") ===col("AccountDB") && col("NumCR").startsWith("40702"), convertRate))).as("TaxAmt"),
+      round(sum(when(col("AccDB") ===col("AccountCR") && col("NumDB").startsWith("40802"), convertRate))).as("ClearAmt"),
+      round(sum(when(col("AccDB") ===col("AccountDB") && condAuto, convertRate))).as("AutoAmt"),
+      round(sum(when(col("AccDB") ===col("AccountCR") && condEat, convertRate))).as("EatAmt"),
+      round(sum(when(col("AccDB") ===col("AccountDB") && col("TypeCR") === "0", convertRate))).as("FLAmt")
     ).orderBy("AccDb", "DateOp").show()
 
   Thread.sleep(Int.MaxValue)
+
+  // 2 витрина
+  /*val corporate_account = corporate_payments
+    .join(clientAndAccount.select($"AccountNum", $"AccountID", $"DateOpen", $"ClientName"), "AccountID")
+    .withColumn("TotalAmt", round($"PaymentAmt"+$"EnrollementAmt",2))
+    .select($"AccountID", $"AccountNum", $"DateOpen", $"ClientId", $"ClientName", $"TotalAmt", $"CutoffDt")
+    .orderBy("AccountID", "CutoffDt")*/
+  // 3 витрина
+  /*val corporate_info = clientAndAccount
+    .join(corporate_account.select($"TotalAmt", $"CutoffDt", $"AccountID"),
+      corporate_account("AccountID") === clientAndAccount("AccountID"), "left")
+    .withColumn("TotalAmt", sum("TotalAmt").over(Window.partitionBy("ClientId", "CutoffDt")))
+    .select("ClientId", "ClientName", "Type", "Form", "RegisterDate", "TotalAmt", "CutoffDt")
+    .distinct()
+    .orderBy("ClientId")*/
 }
 
