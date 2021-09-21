@@ -1,5 +1,5 @@
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.{ DateType, FloatType, IntegerType, StringType, StructField, StructType}
+import org.apache.spark.sql.types.{DateType, DoubleType, FloatType, IntegerType, StringType, StructField, StructType}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.storage.StorageLevel
@@ -7,61 +7,72 @@ import org.apache.spark.storage.StorageLevel
 object Main extends App {
 
   val spark = SparkSession.builder
-    .master("local[4]")
+    .master("local[*]")
     .appName("BankProject")
     .getOrCreate()
 
   spark.sparkContext.setLogLevel("ERROR")
-  spark.conf.set("spark.sql.shuffle.partitions", "20")
+ // spark.conf.set("spark.sql.shuffle.partitions", "20")
 
   val accountSchema = StructType(Array(
-    StructField("AccountID", IntegerType, nullable = true),
-    StructField("AccountNum", StringType, nullable = true),
-    StructField("ClientID", IntegerType, nullable = true),
-    StructField("DateOpen", DateType, nullable = true)
+    StructField("AccountID", IntegerType),
+    StructField("AccountNum", StringType),
+    StructField("ClientID", IntegerType),
+    StructField("DateOpen", DateType)
   ))
   val clientSchema = StructType(Array(
-    StructField("ClientID", IntegerType, nullable = true),
-    StructField("ClientName", StringType, nullable = true),
-    StructField("Type", StringType, nullable = true),
-    StructField("Form", StringType, nullable = true),
-    StructField("RegisterDate", DateType, nullable = true)
+    StructField("ClientID", IntegerType),
+    StructField("ClientName", StringType),
+    StructField("Type", StringType),
+    StructField("Form", StringType),
+    StructField("RegisterDate", DateType)
   ))
   val operationSchema = StructType(Array(
-    StructField("AccountDB", IntegerType, nullable = true),
-    StructField("AccountCR", IntegerType, nullable = true),
-    StructField("DateOp", DateType, nullable = true),
-    StructField("Amount", FloatType, nullable = true),
-    StructField("Currency", StringType, nullable = true),
-    StructField("Comment", StringType, nullable = true)
+    StructField("AccountDB", IntegerType),
+    StructField("AccountCR", IntegerType),
+    StructField("DateOp", DateType),
+    StructField("Amount", FloatType),
+    StructField("Currency", StringType),
+    StructField("Comment", StringType)
   ))
   val rateSchema = StructType(Array(
-    StructField("Currency", StringType, nullable = true),
-    StructField("Rate", StringType, nullable = true),
-    StructField("RateDate", DateType, nullable = true)
+    StructField("Currency", StringType),
+    StructField("Rate", StringType),
+    StructField("RateDate", DateType)
   ))
 
   val accountDf = spark.read
     .format("csv")
     .option("header", "true")
-    .csv("src/main/scala/Account.csv")
+    .option("delimiter","|")
+    .schema(accountSchema)
+    .load("src/main/scala/Account.csv")
   val clientDf = spark.read
     .format("csv")
     .option("header", "true")
-    .csv("src/main/scala/Clients.csv")
+    .option("delimiter","|")
+    .schema(clientSchema)
+    .load("src/main/scala/Clients.csv")
   val operationDf = spark.read
     .format("csv")
     .option("header", "true")
-    .csv("src/main/scala/Operation.csv")
+    .option("delimiter","|")
+    .schema(operationSchema)
+    .load("src/main/scala/Operation.csv")
+    .withColumn("Amount",regexp_replace(col("Amount"), ",","."))
+    .withColumn("Amount",col("Amount").cast(DoubleType))
   val rateDf = spark.read
     .format("csv")
     .option("header", "true")
-    .csv("src/main/scala/rate.csv")
-
+    .option("delimiter","|")
+    .schema(rateSchema)
+    .load("src/main/scala/rate.csv")
+    .withColumn("Rate",regexp_replace(col("Rate"), ",","."))
+    .withColumn("Rate",col("Rate").cast(DoubleType))
 
 
   val acc_cl = accountDf
-    .join(clientDf, accountDf("ClientID") === clientDf("ClientsID"))
+    .join(clientDf, accountDf("ClientID") === clientDf("ClientID"))
     .drop(clientDf("ClientID"))
     .persist(StorageLevel.MEMORY_ONLY_SER)
 
@@ -82,8 +93,8 @@ object Main extends App {
     .drop("DateRate")
     .drop("CurRate")
 
-  val window = Window.partitionBy("Currency").orderBy(desc("Rate"), asc("Date"))
-  daterates = daterates.withColumn("Rate",last("Rate", ignoreNulls = true) over window)
+  val show = Window.partitionBy("Currency").orderBy(desc("Rate"), asc("Date"))
+  daterates = daterates.withColumn("Rate",last("Rate", ignoreNulls = true) over show)
 
   val result = operationDf
     .join(acc_cl.select(
@@ -103,11 +114,11 @@ object Main extends App {
     .drop(daterates("Currency"))
     .drop(daterates("Date"))
 
-  val arrAuto = raw"%а/м%, %а\м%, %автомобиль %, %автомобили %, %транспорт%, %трансп%средс%, %легков%, %тягач%, %вин%, %vin%,%viн:%, %fоrd%, %форд%,%кiа%, %кия%, %киа%%мiтsuвisнi%, %мицубиси%, %нissан%, %ниссан%, %sсанiа%, %вмw%, %бмв%, %аudi%, %ауди%, %jеер%, %джип%, %vоlvо%, %вольво%, %тоyота%, %тойота%, %тоиота%, %нyuнdаi%, %хендай%, %rенаulт%, %рено%, %реugеот%, %пежо%, %lаdа%, %лада%, %dатsuн%, %додж%, %меrсеdеs%, %мерседес%, %vоlкswаgен%, %фольксваген%, %sкоdа%, %шкода%, %самосвал%, %rover%, %ровер%"
-  val arrEat = raw"% сою%, %соя%, %зерно%, %кукуруз%, %масло%, %молок%, %молоч%, %мясн%, %мясо%, %овощ%, %подсолн%, %пшениц%, %рис%, %с/х%прод%, %с/х%товар%, %с\х%прод%, %с\х%товар%, %сахар%, %сельск%прод%, %сельск%товар%, %сельхоз%прод%, %сельхоз%товар%, %семен%, %семечк%, %сено%, %соев%, %фрукт%, %яиц%, %ячмен%, %картоф%, %томат%, %говя%, %свин%, %курин%, %куриц%, %рыб%, %алко%, %чаи%, %кофе%, %чипс%, %напит%, %бакале%, %конфет%, %колбас%, %морож%, %с/м%, %с\м%, %консерв%, %пищев%, %питан%, %сыр%, %макарон%, %лосос%, %треск%, %саир%, % филе%, % хек%, %хлеб%, %какао%, %кондитер%, %пиво%, %ликер%"
+  val listAuto = raw"%а/м%, %а\м%, %автомобиль %, %автомобили %, %транспорт%, %трансп%средс%, %легков%, %тягач%, %вин%, %vin%,%viн:%, %fоrd%, %форд%,%кiа%, %кия%, %киа%%мiтsuвisнi%, %мицубиси%, %нissан%, %ниссан%, %sсанiа%, %вмw%, %бмв%, %аudi%, %ауди%, %jеер%, %джип%, %vоlvо%, %вольво%, %тоyота%, %тойота%, %тоиота%, %нyuнdаi%, %хендай%, %rенаulт%, %рено%, %реugеот%, %пежо%, %lаdа%, %лада%, %dатsuн%, %додж%, %меrсеdеs%, %мерседес%, %vоlкswаgен%, %фольксваген%, %sкоdа%, %шкода%, %самосвал%, %rover%, %ровер%"
+  val listEat = raw"% сою%, %соя%, %зерно%, %кукуруз%, %масло%, %молок%, %молоч%, %мясн%, %мясо%, %овощ%, %подсолн%, %пшениц%, %рис%, %с/х%прод%, %с/х%товар%, %с\х%прод%, %с\х%товар%, %сахар%, %сельск%прод%, %сельск%товар%, %сельхоз%прод%, %сельхоз%товар%, %семен%, %семечк%, %сено%, %соев%, %фрукт%, %яиц%, %ячмен%, %картоф%, %томат%, %говя%, %свин%, %курин%, %куриц%, %рыб%, %алко%, %чаи%, %кофе%, %чипс%, %напит%, %бакале%, %конфет%, %колбас%, %морож%, %с/м%, %с\м%, %консерв%, %пищев%, %питан%, %сыр%, %макарон%, %лосос%, %треск%, %саир%, % филе%, % хек%, %хлеб%, %какао%, %кондитер%, %пиво%, %ликер%"
 
-  val condAuto = arrAuto.map(condition => !col("Comment").like(raw"$condition")).reduce(_ || _)
-  val condEat = arrEat.map(condition => !col("Comment").like(raw"$condition")).reduce(_ || _)
+  val condAuto = listAuto.map(condition => !col("Comment").like(raw"$condition")).reduce(_ || _)
+  val condEat = listEat.map(condition => !col("Comment").like(raw"$condition")).reduce(_ || _)
 
   val convertRate = when(col("Currency").like("RUB"), col("Amount")).otherwise(col("Amount") * col("Rate"))
 
@@ -151,10 +162,9 @@ CutoffDt
       round(sum(when(col("AccDB") ===col("AccountDB") && condAuto, convertRate))).as("AutoAmt"),
       round(sum(when(col("AccDB") ===col("AccountCR") && condEat, convertRate))).as("EatAmt"),
       round(sum(when(col("AccDB") ===col("AccountDB") && col("TypeCR") === "0", convertRate))).as("FLAmt")
-    ).orderBy("AccDb", "DateOp").show()
+    ).orderBy("AccDB", "DateOp").show()
 
   Thread.sleep(Int.MaxValue)
-
   // 2 витрина
   /*val corporate_account = corporate_payments
     .join(clientAndAccount.select($"AccountNum", $"AccountID", $"DateOpen", $"ClientName"), "AccountID")
